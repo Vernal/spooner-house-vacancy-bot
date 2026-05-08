@@ -4,11 +4,10 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const DRY_RUN = process.env.DRY_RUN === 'true';
 
-// ─── Logging ────────────────────────────────────────────────────────────────
+// ─── Logging ─────────────────────────────────────────────────────────────────
 
 function log(message) {
   console.log(`[${new Date().toISOString()}] ${message}`);
@@ -22,9 +21,79 @@ function getTomorrow() {
   return d.toISOString().split('T')[0]; // YYYY-MM-DD
 }
 
-// ─── Workflow ─────────────────────────────────────────────────────────────────
+// ─── MCP Client ──────────────────────────────────────────────────────────────
+// Implements the Streamable HTTP MCP transport used by mcp.hospitable.com.
+// Each call POSTs a JSON-RPC 2.0 request and handles either a plain JSON
+// response or a text/event-stream (SSE) response.
 
-const DRY_RUN = process.env.DRY_RUN === 'true';
+const MCP_URL = 'https://mcp.hospitable.com/mcp';
+
+async function mcpRequest(method, params = {}) {
+  const res = await fetch(MCP_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream',
+      'Authorization': `Bearer ${process.env.HOSPITABLE_API_TOKEN}`,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: `${method}-${Date.now()}`,
+      method,
+      params,
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`MCP HTTP ${res.status}: ${body}`);
+  }
+
+  const contentType = res.headers.get('content-type') ?? '';
+
+  if (contentType.includes('text/event-stream')) {
+    // Parse SSE stream — find the first data line that contains a result
+    const text = await res.text();
+    for (const line of text.split('\n')) {
+      if (!line.startsWith('data: ')) continue;
+      try {
+        const parsed = JSON.parse(line.slice(6));
+        if (parsed.error) throw new Error(`MCP error: ${JSON.stringify(parsed.error)}`);
+        if (parsed.result !== undefined) return parsed.result;
+      } catch (e) {
+        if (e.message.startsWith('MCP error:')) throw e;
+        // skip non-JSON data lines (comments, pings, etc.)
+      }
+    }
+    throw new Error('No result found in MCP SSE stream');
+  }
+
+  const data = await res.json();
+  if (data.error) throw new Error(`MCP error: ${JSON.stringify(data.error)}`);
+  return data.result;
+}
+
+// Convert MCP tool list → Anthropic custom tool definitions
+async function getHospitableTools() {
+  const result = await mcpRequest('tools/list');
+  return (result.tools ?? []).map(tool => ({
+    name: tool.name,
+    description: tool.description ?? '',
+    input_schema: tool.inputSchema ?? { type: 'object', properties: {} },
+  }));
+}
+
+// Execute a single MCP tool call and return the text result
+async function callHospitableTool(name, input) {
+  log(`  → MCP: ${name}  ${JSON.stringify(input).slice(0, 160)}`);
+  const result = await mcpRequest('tools/call', { name, arguments: input });
+  const content = Array.isArray(result?.content) ? result.content : [];
+  return content
+    .map(c => (c.type === 'text' ? c.text : JSON.stringify(c)))
+    .join('\n') || 'Done.';
+}
+
+// ─── Workflow ─────────────────────────────────────────────────────────────────
 
 async function runVacancyOfferWorkflow() {
   const tomorrow = getTomorrow();
@@ -32,10 +101,27 @@ async function runVacancyOfferWorkflow() {
   log('================================================================');
   log('  Spooner House — Evening Vacancy Offer Workflow');
   log(`  Checking checkouts for: ${tomorrow}`);
-  if (DRY_RUN) {
-    log('  ⚠️  DRY RUN — no messages will be sent');
-  }
+  if (DRY_RUN) log('  ⚠️  DRY RUN — no messages will be sent');
   log('================================================================');
+
+  // Pull all available tools from the Hospitable MCP server
+  log('Fetching Hospitable MCP tools …');
+  const allTools = await getHospitableTools();
+  log(`Found ${allTools.length} tool(s): ${allTools.map(t => t.name).join(', ')}`);
+
+  // In dry-run mode, block any tool whose name suggests it sends messages.
+  // Claude literally cannot call them — they don't appear in its tool list.
+  const SEND_PATTERN = /send|message|post|reply|notify/i;
+  const tools = DRY_RUN
+    ? allTools.filter(t => !SEND_PATTERN.test(t.name))
+    : allTools;
+
+  if (DRY_RUN) {
+    const blocked = allTools.filter(t => SEND_PATTERN.test(t.name));
+    if (blocked.length) {
+      log(`DRY RUN: blocked send tool(s): ${blocked.map(t => t.name).join(', ')}`);
+    }
+  }
 
   const systemPrompt = `You are the hospitality assistant for Spooner House, a warm and welcoming bed \
 and breakfast. You genuinely care about every guest. When writing messages to guests, write with real \
@@ -55,8 +141,8 @@ ${tomorrow} to see whether that night is vacant (no reservation occupying it).
 
 **Step 4 — ${DRY_RUN ? 'Preview extension offers (DRY RUN — do NOT send anything)' : 'Send extension offers'}**
 For every room that IS vacant on ${tomorrow}, ${DRY_RUN
-  ? `write out the exact message you WOULD send to the guest, but DO NOT call any send or message tool. \
-This is a dry run for testing — output the message text so it can be reviewed, but take no action.`
+  ? `write out the exact message you WOULD send to the guest, but do not call any send or message tool. \
+This is a dry run — output the full message text so it can be reviewed, but take no action.`
   : `send the current guest a warm, personal message offering them the chance to stay an additional night \
 at a 20% discount off their current nightly rate.`}
 
@@ -70,51 +156,37 @@ The message must:
 
 **Step 5 — Summary log**
 After completing all steps, provide a clear summary:
-- ${DRY_RUN ? 'List each guest who WOULD have received an offer, and show the exact message text that would have been sent' : 'List each guest who received an offer'} (guest name, property/room, checkout date)
-- List each room that was already booked for ${tomorrow} (no offer ${DRY_RUN ? 'would be' : ''} sent, already occupied)
+- ${DRY_RUN
+    ? 'List each guest who WOULD have received an offer and show the exact message text'
+    : 'List each guest who received an offer'} (guest name, property/room, checkout date)
+- List each room already booked for ${tomorrow} (no offer sent, already occupied)
 - Note any errors or unexpected results
-${DRY_RUN ? '- Remind clearly at the top of the summary: THIS WAS A DRY RUN — no messages were sent' : ''}`;
+${DRY_RUN ? '- Clearly state at the top: THIS WAS A DRY RUN — no messages were sent' : ''}`;
 
   const messages = [{ role: 'user', content: userPrompt }];
-
   let iteration = 0;
-  const MAX_ITERATIONS = 15;
+  const MAX_ITERATIONS = 20;
 
   try {
     while (iteration < MAX_ITERATIONS) {
       iteration++;
       log(`API call #${iteration} …`);
 
-      const response = await client.beta.messages.create({
+      const response = await client.messages.create({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 4096,
         system: systemPrompt,
-        betas: ['mcp-client-2025-04-04'],
-        mcp_servers: [
-          {
-            type: 'url',
-            url: 'https://mcp.hospitable.com/mcp',
-            name: 'hospitable',
-            authorization_token: process.env.HOSPITABLE_API_TOKEN,
-          },
-        ],
-        tools: [
-          {
-            type: 'mcp_toolset',
-            mcp_server_name: 'hospitable',
-          },
-        ],
+        tools,
         messages,
       });
 
-      const inputTokens = response.usage?.input_tokens ?? '?';
-      const outputTokens = response.usage?.output_tokens ?? '?';
-      log(`Stop reason: ${response.stop_reason}  |  tokens in: ${inputTokens}  out: ${outputTokens}`);
+      const { input_tokens: i = '?', output_tokens: o = '?' } = response.usage ?? {};
+      log(`Stop reason: ${response.stop_reason}  |  tokens in: ${i}  out: ${o}`);
 
-      // Always append the assistant turn so the loop state is coherent
+      // Always append the full assistant turn before looping
       messages.push({ role: 'assistant', content: response.content });
 
-      // ── Natural completion ────────────────────────────────────────────────
+      // ── Done ─────────────────────────────────────────────────────────────
       if (response.stop_reason === 'end_turn') {
         for (const block of response.content) {
           if (block.type === 'text') {
@@ -127,33 +199,24 @@ ${DRY_RUN ? '- Remind clearly at the top of the summary: THIS WAS A DRY RUN — 
         return;
       }
 
-      // ── Server-side tools need another turn (pause_turn) ──────────────────
-      if (response.stop_reason === 'pause_turn') {
-        log('Workflow paused by server — continuing …');
-        continue;
-      }
-
-      // ── Client-side tool calls (unexpected with server-side MCP but handled) ─
+      // ── Tool calls ───────────────────────────────────────────────────────
       if (response.stop_reason === 'tool_use') {
         const toolResults = [];
         for (const block of response.content) {
-          if (block.type === 'tool_use') {
-            const inputPreview = JSON.stringify(block.input).slice(0, 120);
-            log(`  Tool called: ${block.name}  input: ${inputPreview}`);
-            toolResults.push({
-              type: 'tool_result',
-              tool_use_id: block.id,
-              content: 'Executed via Hospitable MCP server.',
-            });
+          if (block.type !== 'tool_use') continue;
+          let content;
+          try {
+            content = await callHospitableTool(block.name, block.input);
+          } catch (err) {
+            content = `Error calling ${block.name}: ${err.message}`;
+            log(`  Tool error: ${err.message}`);
           }
+          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content });
         }
-        if (toolResults.length > 0) {
-          messages.push({ role: 'user', content: toolResults });
-        }
+        messages.push({ role: 'user', content: toolResults });
         continue;
       }
 
-      // ── Safety valve ──────────────────────────────────────────────────────
       log(`WARNING: Unexpected stop reason "${response.stop_reason}" — stopping loop`);
       break;
     }
@@ -164,15 +227,10 @@ ${DRY_RUN ? '- Remind clearly at the top of the summary: THIS WAS A DRY RUN — 
   } catch (error) {
     if (error instanceof Anthropic.APIError) {
       log(`API Error  HTTP ${error.status}: ${error.message}`);
-      if (error.status === 400) {
-        log('Hint: Verify model ID, beta header "mcp-client-2025-04-04", and MCP server URL.');
-      } else if (error.status === 401) {
-        log('Hint: Check ANTHROPIC_API_KEY and HOSPITABLE_API_TOKEN values.');
-      } else if (error.status === 429) {
-        log('Hint: Rate limited — consider running the cron job less frequently.');
-      }
+      if (error.status === 401) log('Hint: Check ANTHROPIC_API_KEY.');
+      if (error.status === 400) log('Hint: Check model ID and request shape.');
     } else {
-      log(`Unexpected error: ${error.message}`);
+      log(`Error: ${error.message}`);
     }
     throw error;
   }
@@ -180,14 +238,11 @@ ${DRY_RUN ? '- Remind clearly at the top of the summary: THIS WAS A DRY RUN — 
 
 // ─── Scheduler ───────────────────────────────────────────────────────────────
 
-// Runs every day at 7:00 PM Eastern Time
 cron.schedule(
   '0 19 * * *',
   () => {
     log('Cron fired — starting vacancy offer workflow …');
-    runVacancyOfferWorkflow().catch((err) => {
-      log(`Workflow failed: ${err.message}`);
-    });
+    runVacancyOfferWorkflow().catch(err => log(`Workflow failed: ${err.message}`));
   },
   { timezone: 'America/New_York' },
 );
@@ -202,7 +257,7 @@ if (process.argv.includes('--run-now') || process.env.RUN_NOW === 'true') {
     ? 'RUN_NOW env var detected — executing workflow immediately …'
     : '--run-now flag detected — executing workflow immediately …'
   );
-  runVacancyOfferWorkflow().catch((err) => {
+  runVacancyOfferWorkflow().catch(err => {
     log(`Workflow failed: ${err.message}`);
     process.exit(1);
   });
