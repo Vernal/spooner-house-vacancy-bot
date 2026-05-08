@@ -18,7 +18,7 @@ Claude uses the [Hospitable MCP server](https://mcp.hospitable.com/mcp) to read 
 
 - Node.js 18 or later
 - An [Anthropic API key](https://console.anthropic.com)
-- A [Hospitable MCP Fallback Bearer token](https://my.hospitable.com/integrations/mcp))
+- A [Hospitable MCP Fallback Bearer token](https://my.hospitable.com/integrations/mcp)
 
 
 ### Environment variables
