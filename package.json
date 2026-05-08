@@ -1,0 +1,19 @@
+{
+  "name": "spooner-house-vacancy-bot",
+  "version": "1.0.0",
+  "description": "Automated vacancy offer workflow for Spooner House B&B",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "run-now": "node index.js --run-now"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.51.0",
+    "dotenv": "^16.4.0",
+    "node-cron": "^3.0.3"
+  }
+}
