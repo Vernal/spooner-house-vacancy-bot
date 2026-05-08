@@ -138,6 +138,7 @@ Find all reservations that are checking out on ${tomorrow}. These are the guests
 **Step 3 — Check tomorrow's vacancy**
 For each property that has a checkout on ${tomorrow}, check that property's Hospitable calendar for \
 ${tomorrow} to see whether that night is vacant (no reservation occupying it).
+Only offer the guest to extend in the exact same room/property they are currently booked in. Do not suggest or offer any other room.
 
 **Step 4 — ${DRY_RUN ? 'Preview extension offers (DRY RUN — do NOT send anything)' : 'Send extension offers'}**
 For every room that IS vacant on ${tomorrow}, ${DRY_RUN
