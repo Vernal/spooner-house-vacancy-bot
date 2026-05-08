@@ -49,6 +49,14 @@ npm start
 
 ---
 
+## Dry run / testing mode
+
+Set `DRY_RUN=true` in your environment to run the full workflow every evening without sending any messages. Claude will still fetch all properties, find checkouts, and check calendars — but instead of calling the send-message tool it will write out exactly what it would have sent. Check the Railway logs each morning to verify the logic looks right.
+
+When you're satisfied after a week or two, go to Railway → **Variables**, delete `DRY_RUN` (or set it to `false`), and the bot goes live on the next 7 PM run.
+
+---
+
 ## Deploying to Railway
 
 ### 1. Push to GitHub

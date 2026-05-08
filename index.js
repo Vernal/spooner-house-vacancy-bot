@@ -24,12 +24,17 @@ function getTomorrow() {
 
 // ─── Workflow ─────────────────────────────────────────────────────────────────
 
+const DRY_RUN = process.env.DRY_RUN === 'true';
+
 async function runVacancyOfferWorkflow() {
   const tomorrow = getTomorrow();
 
   log('================================================================');
   log('  Spooner House — Evening Vacancy Offer Workflow');
   log(`  Checking checkouts for: ${tomorrow}`);
+  if (DRY_RUN) {
+    log('  ⚠️  DRY RUN — no messages will be sent');
+  }
   log('================================================================');
 
   const systemPrompt = `You are the hospitality assistant for Spooner House, a warm and welcoming bed \
@@ -48,9 +53,12 @@ Find all reservations that are checking out on ${tomorrow}. These are the guests
 For each property that has a checkout on ${tomorrow}, check that property's Hospitable calendar for \
 ${tomorrow} to see whether that night is vacant (no reservation occupying it).
 
-**Step 4 — Send extension offers**
-For every room that IS vacant on ${tomorrow}, send the current guest a warm, personal message offering \
-them the chance to stay an additional night at a 20% discount off their current nightly rate.
+**Step 4 — ${DRY_RUN ? 'Preview extension offers (DRY RUN — do NOT send anything)' : 'Send extension offers'}**
+For every room that IS vacant on ${tomorrow}, ${DRY_RUN
+  ? `write out the exact message you WOULD send to the guest, but DO NOT call any send or message tool. \
+This is a dry run for testing — output the message text so it can be reviewed, but take no action.`
+  : `send the current guest a warm, personal message offering them the chance to stay an additional night \
+at a 20% discount off their current nightly rate.`}
 
 The message must:
 - Feel warm and genuine — not automated or templated
@@ -62,9 +70,10 @@ The message must:
 
 **Step 5 — Summary log**
 After completing all steps, provide a clear summary:
-- List each guest who received an offer (guest name, property/room, their checkout date)
-- List each room that was already booked for ${tomorrow} (no offer sent, already occupied)
-- Note any errors or unexpected results`;
+- ${DRY_RUN ? 'List each guest who WOULD have received an offer, and show the exact message text that would have been sent' : 'List each guest who received an offer'} (guest name, property/room, checkout date)
+- List each room that was already booked for ${tomorrow} (no offer ${DRY_RUN ? 'would be' : ''} sent, already occupied)
+- Note any errors or unexpected results
+${DRY_RUN ? '- Remind clearly at the top of the summary: THIS WAS A DRY RUN — no messages were sent' : ''}`;
 
   const messages = [{ role: 'user', content: userPrompt }];
 
