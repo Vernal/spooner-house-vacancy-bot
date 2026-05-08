@@ -197,8 +197,11 @@ log('Scheduled: daily at 7:00 PM Eastern (America/New_York).');
 
 // ─── Manual run ──────────────────────────────────────────────────────────────
 
-if (process.argv.includes('--run-now')) {
-  log('--run-now flag detected — executing workflow immediately …');
+if (process.argv.includes('--run-now') || process.env.RUN_NOW === 'true') {
+  log(process.env.RUN_NOW === 'true'
+    ? 'RUN_NOW env var detected — executing workflow immediately …'
+    : '--run-now flag detected — executing workflow immediately …'
+  );
   runVacancyOfferWorkflow().catch((err) => {
     log(`Workflow failed: ${err.message}`);
     process.exit(1);
