@@ -50,14 +50,14 @@ ${tomorrow} to see whether that night is vacant (no reservation occupying it).
 
 **Step 4 — Send extension offers**
 For every room that IS vacant on ${tomorrow}, send the current guest a warm, personal message offering \
-them the chance to stay one additional night at a 15% discount off their current nightly rate.
+them the chance to stay an additional night at a 20% discount off their current nightly rate.
 
 The message must:
 - Feel warm and genuine — not automated or templated
 - Mention "Spooner House" by name
 - Express authentic delight that they're staying with us
 - Frame the discount as a special treat just for them, not a hard sell
-- State clearly: one more night, 15% off their current nightly rate
+- State clearly: one more night, 20% off their current nightly rate
 - Invite them to reply if they're interested — no pressure
 
 **Step 5 — Summary log**
