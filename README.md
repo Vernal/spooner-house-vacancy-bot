@@ -1,6 +1,6 @@
 # Spooner House — Vacancy Offer Bot
 
-Runs every evening at 7:00 PM Eastern and automatically offers guests who check out tomorrow the chance to extend their stay one more night at a 15% discount — but only if their room is actually vacant the next day.
+Runs every evening at 7:00 PM Eastern and automatically offers guests who check out tomorrow the chance to extend their stay one more night at a discount — but only if their room is actually vacant the next day.
 
 ## How it works
 
@@ -18,34 +18,15 @@ Claude uses the [Hospitable MCP server](https://mcp.hospitable.com/mcp) to read 
 
 - Node.js 18 or later
 - An [Anthropic API key](https://console.anthropic.com)
-- A [Hospitable API token](https://app.hospitable.com/settings/api)
+- A [Hospitable MCP Fallback Bearer token](https://my.hospitable.com/integrations/mcp))
 
----
-
-## Local setup
-
-```bash
-# 1. Clone / download this project, then install dependencies
-cd spooner-house-vacancy-bot
-npm install
-
-# 2. Create your .env file
-cp .env.example .env
-# Edit .env and fill in both keys
-
-# 3. Test it immediately (does a real run right now)
-npm run run-now
-
-# 4. Start the scheduler (runs at 7 PM ET every day)
-npm start
-```
 
 ### Environment variables
 
 | Variable | Where to find it |
 |---|---|
 | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) → API Keys |
-| `HOSPITABLE_API_TOKEN` | Hospitable → Settings → API |
+| `HOSPITABLE_API_TOKEN` | Hospitable → Settings → Integrations → MCP Fallback Bearer Tokens |
 
 ---
 
