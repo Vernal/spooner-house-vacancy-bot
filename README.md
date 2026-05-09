@@ -1,14 +1,14 @@
-# Spooner House — Vacancy Offer Bot
+# Spooner House — Gap Offer Bot
 
-Runs every evening at 7:00 PM Eastern and automatically offers guests who check out tomorrow the chance to extend their stay one more night at a discount — but only if their room is actually vacant the next day.
+Runs every evening at 7:00 PM Eastern and proactively fills single-night gaps across all upcoming reservations — up to 90 days out. For every 1-night gap between consecutive bookings, it messages both the outgoing guest (extend your stay) and the incoming guest (arrive a night early), each at a 20% discount. A last-minute layer also catches any same-night vacancies that weren't already handled.
 
 ## How it works
 
-1. Asks Claude to fetch all properties from Hospitable
-2. Claude finds reservations checking out tomorrow
-3. For each checkout, Claude checks the Hospitable calendar to see if that room is empty tomorrow night
-4. If vacant, Claude sends the current guest a warm, personal message with the extension offer
-5. Logs a summary of who was messaged and which rooms were already booked
+1. Fetches all properties from Hospitable
+2. For each property, fetches all reservations over the next 90 days and finds consecutive pairs with exactly one vacant night between them
+3. For each gap, sends two warm personal messages at 20% off — one to the outgoing guest offering to extend, one to the incoming guest offering to arrive early; both include a `%guest_portal%` link so guests can take action directly in the Hospitable portal
+4. As a last-minute layer, checks tomorrow's checkouts — any room not already handled by the gap scan gets a last-minute extension offer with a `%SmartUpsell%` link for early/late checkout options
+5. Logs a full summary of every gap found, every message sent, and any rooms that were already occupied
 
 Claude uses the [Hospitable MCP server](https://mcp.hospitable.com/mcp) to read reservations, check calendars, and send messages — all in a single agentic loop.
 
@@ -73,11 +73,18 @@ Railway's **Logs** tab will show timestamped output like:
 ```
 [2025-05-08T23:00:00.000Z] Cron fired — starting vacancy offer workflow …
 [2025-05-08T23:00:01.123Z] API call #1 …
-[2025-05-08T23:00:04.567Z] Stop reason: end_turn  |  tokens in: 1842  out: 612
-[2025-05-08T23:00:04.568Z] ─── Workflow summary ───────────────────────────────────────────
-Room 2 (The Oak Room) — Sarah & Tom Chen: offer sent ✓
-Room 3 (The Garden Suite) — already booked tomorrow, no offer sent
-[2025-05-08T23:00:04.569Z] Vacancy offer workflow completed successfully.
+[2025-05-08T23:00:12.345Z] Stop reason: end_turn  |  tokens in: 3241  out: 891
+[2025-05-08T23:00:12.346Z] ─── Workflow summary ───────────────────────────────────────────
+Gaps found (90-day scan):
+  May 12 — The Oak Room: gap night between Chen checkout (May 12) and Patel check-in (May 13)
+    → Outgoing offer sent to Sarah & Tom Chen ✓
+    → Incoming offer sent to Raj Patel ✓
+  May 19 — The Garden Suite: gap night between Lopez checkout (May 19) and Kim check-in (May 20)
+    → Outgoing offer sent to Maria Lopez ✓
+    → Incoming offer sent to Jin Kim ✓
+Last-minute layer (tomorrow May 9):
+  The Birch Room — already booked tomorrow, no offer sent
+[2025-05-08T23:00:12.347Z] Vacancy offer workflow completed successfully.
 ```
 
 ### 5. Force a manual run on Railway
@@ -109,4 +116,4 @@ The bot uses `claude-sonnet-4-20250514`. To upgrade to the latest Sonnet release
 | `HTTP 401` | Verify `ANTHROPIC_API_KEY` and `HOSPITABLE_API_TOKEN` are set correctly |
 | `HTTP 400` with MCP error | Check that the `mcp-client-2025-04-04` beta header is still current — Anthropic occasionally updates beta identifiers |
 | Offers sent to guests in wrong timezone | The "tomorrow" calculation uses UTC midnight; review `getTomorrow()` if your guests' checkouts span midnight in your local time |
-| Workflow hits iteration limit | Increase `MAX_ITERATIONS` in `index.js` (default: 15) |
+| Workflow hits iteration limit | Increase `MAX_ITERATIONS` in `index.js` (default: 30) |

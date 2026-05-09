@@ -15,9 +15,19 @@ function log(message) {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+function getToday() {
+  return new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+}
+
 function getTomorrow() {
   const d = new Date();
   d.setDate(d.getDate() + 1);
+  return d.toISOString().split('T')[0]; // YYYY-MM-DD
+}
+
+function getDaysFromNow(n) {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
   return d.toISOString().split('T')[0]; // YYYY-MM-DD
 }
 
@@ -96,11 +106,14 @@ async function callHospitableTool(name, input) {
 // ─── Workflow ─────────────────────────────────────────────────────────────────
 
 async function runVacancyOfferWorkflow() {
+  const today    = getToday();
   const tomorrow = getTomorrow();
+  const horizon  = getDaysFromNow(90);
 
   log('================================================================');
-  log('  Spooner House — Evening Vacancy Offer Workflow');
-  log(`  Checking checkouts for: ${tomorrow}`);
+  log('  Spooner House — Evening Gap-Offer Workflow');
+  log(`  Today: ${today}  |  Scanning gaps through: ${horizon}`);
+  log(`  Last-minute layer: ${tomorrow}`);
   if (DRY_RUN) log('  ⚠️  DRY RUN — no messages will be sent');
   log('================================================================');
 
@@ -127,46 +140,69 @@ async function runVacancyOfferWorkflow() {
 and breakfast. You genuinely care about every guest. When writing messages to guests, write with real \
 warmth — as if you personally know them and are delighted they chose Spooner House.`;
 
-  const userPrompt = `Please complete the following vacancy offer workflow for Spooner House B&B:
+  const userPrompt = `Please complete the following gap-offer workflow for Spooner House B&B:
 
 **Step 1 — Get properties**
 Fetch all properties/rooms from Hospitable.
 
-**Step 2 — Find tonight's checkouts**
-Find all reservations that are checking out on ${tomorrow}. These are the guests currently staying.
+**Step 2 — 90-day gap scan**
+For EACH property, fetch all reservations with check-in dates between ${today} and ${horizon}. \
+Sort them by check-in date. Identify every consecutive pair (A, B) where reservation A's \
+checkout_date is exactly one night before reservation B's check_in_date — meaning there is \
+exactly one vacant night between them.
 
-**Step 3 — Check tomorrow's vacancy**
-For each property that has a checkout on ${tomorrow}, check that property's Hospitable calendar for \
-${tomorrow} to see whether that night is vacant (no reservation occupying it).
-Only offer the guest to extend in the exact same room/property they are currently booked in. Do not suggest or offer any other room.
+Build a gap list: { property, gapNight, outgoingReservation (A), incomingReservation (B) }
 
-**Step 4 — ${DRY_RUN ? 'Preview extension offers (DRY RUN — do NOT send anything)' : 'Send extension offers'}**
-For every room that IS vacant on ${tomorrow}, ${DRY_RUN
-  ? `write out the exact message you WOULD send to the guest, but do not call any send or message tool. \
-This is a dry run — output the full message text so it can be reviewed, but take no action.`
-  : `send the current guest a warm, personal message offering them the chance to stay an additional night \
-at a 20% discount off their current nightly rate.`}
+**Step 3 — ${DRY_RUN ? 'Preview two-sided offers (DRY RUN — do NOT send anything)' : 'Send two-sided offers for every gap'}**
+For each gap found in Step 2, ${DRY_RUN
+  ? `write out the exact messages you WOULD send, but do not call any send or message tool. \
+Output the full message text for both guests so they can be reviewed.`
+  : `send two messages:`}
 
-The message must:
-- Feel warm and genuine — not automated or templated
+  a) Message reservation A's guest (outgoing): a warm offer to extend their stay one more night \
+(the gap night) at 20% off their current nightly rate. Include the shortcode %guest_portal% as \
+a clickable link so they can easily take action through the Spooner House guest portal.
+
+  b) Message reservation B's guest (incoming): a warm offer to arrive one night early (the gap \
+night) at 20% off their current nightly rate. Include the shortcode %guest_portal% as a clickable \
+link so they can easily take action through the Spooner House guest portal.
+
+Only ever offer the guest their exact same room — never suggest a different property.
+
+**Step 4 — Last-minute layer (tomorrow's checkouts)**
+Find all reservations checking out on ${tomorrow}. For each one:
+- If that reservation was ALREADY messaged in Step 3 (it was the outgoing side of a detected gap), \
+skip it — the guest has already been contacted.
+- Otherwise, check that property's Hospitable calendar for ${tomorrow}. If the night is vacant, \
+${DRY_RUN
+  ? `write out the last-minute message you WOULD send but do not call any send tool.`
+  : `send a last-minute extension offer.`} Include the shortcode %SmartUpsell% in the message \
+so the guest can self-serve early check-out, a late check-out, or an extra night directly through \
+the Hospitable guest portal.
+
+**Message guidelines (all messages)**
+Every message must:
+- Feel warm and genuine — never automated or templated
 - Mention "Spooner House" by name
-- Express authentic delight that they're staying with us
-- Frame the discount as a special treat just for them, not a hard sell
-- State clearly: one more night, 20% off their current nightly rate
-- Invite them to reply if they're interested — no pressure
+- Express authentic delight that they chose to stay with us
+- Frame the offer as a special treat, not a hard sell
+- State clearly: one extra night, 20% off their current nightly rate
+- Include the relevant portal/upsell link shortcode naturally in the message body
+- Invite them to reply if interested — no pressure
+- Outgoing guests: frame as "one more night before you go"
+- Incoming guests: frame as "arrive a night early and settle right in"
 
 **Step 5 — Summary log**
-After completing all steps, provide a clear summary:
-- ${DRY_RUN
-    ? 'List each guest who WOULD have received an offer and show the exact message text'
-    : 'List each guest who received an offer'} (guest name, property/room, checkout date)
-- List each room already booked for ${tomorrow} (no offer sent, already occupied)
-- Note any errors or unexpected results
-${DRY_RUN ? '- Clearly state at the top: THIS WAS A DRY RUN — no messages were sent' : ''}`;
+${DRY_RUN ? '**THIS WAS A DRY RUN — no messages were sent**\n\n' : ''}\
+Provide a clear summary:
+- All gaps found (property, gap night, outgoing guest name, incoming guest name)
+- For each gap: the two messages ${DRY_RUN ? 'that WOULD have been sent' : 'sent'} (outgoing + incoming)
+- Last-minute results: sent / skipped-already-handled / room-occupied — one line per checkout
+- Any errors or unexpected results`;
 
   const messages = [{ role: 'user', content: userPrompt }];
   let iteration = 0;
-  const MAX_ITERATIONS = 20;
+  const MAX_ITERATIONS = 30;
 
   try {
     while (iteration < MAX_ITERATIONS) {
