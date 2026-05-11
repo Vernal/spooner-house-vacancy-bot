@@ -137,23 +137,29 @@ async function runVacancyOfferWorkflow() {
   if (DRY_RUN) log('  ⚠️  DRY RUN — no messages will be sent');
   log('================================================================');
 
-  // Pull all available tools from the Hospitable MCP server
+  // Pull only the tools this workflow actually needs.
+  // Passing all 48 Hospitable tool schemas on every API call is the single
+  // biggest driver of token cost — this cuts it by ~85%.
+  const NEEDED_TOOLS = new Set([
+    'get-properties',
+    'get-reservations',
+    'get-reservation',
+    'get-property-calendar',
+    'send-reservation-message',
+  ]);
+
   log('Fetching Hospitable MCP tools …');
   const allTools = await getHospitableTools();
-  log(`Found ${allTools.length} tool(s): ${allTools.map(t => t.name).join(', ')}`);
+  const workflowTools = allTools.filter(t => NEEDED_TOOLS.has(t.name));
+  log(`Using ${workflowTools.length}/${allTools.length} tool(s): ${workflowTools.map(t => t.name).join(', ')}`);
 
-  // In dry-run mode, block any tool whose name suggests it sends messages.
-  // Claude literally cannot call them — they don't appear in its tool list.
-  const SEND_PATTERN = /send|message|post|reply|notify/i;
+  // In dry-run mode, strip the send tool so Claude literally cannot call it.
   const tools = DRY_RUN
-    ? allTools.filter(t => !SEND_PATTERN.test(t.name))
-    : allTools;
+    ? workflowTools.filter(t => t.name !== 'send-reservation-message')
+    : workflowTools;
 
   if (DRY_RUN) {
-    const blocked = allTools.filter(t => SEND_PATTERN.test(t.name));
-    if (blocked.length) {
-      log(`DRY RUN: blocked send tool(s): ${blocked.map(t => t.name).join(', ')}`);
-    }
+    log('DRY RUN: blocked send-reservation-message');
   }
 
   const systemPrompt = `You are the hospitality assistant for Spooner House, a warm and welcoming bed \
