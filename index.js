@@ -382,11 +382,11 @@ async function runVacancyOfferWorkflow() {
 
     `Before sending each message, check the guest's priorOffer field:\n` +
     `- priorOffer is null → send a normal first-time offer\n` +
-    `- priorOffer.guestReplied is false → send a brief, light follow-up that acknowledges ` +
-    `we mentioned this before ("just wanted to circle back…"), no pressure\n` +
-    `- priorOffer.outcome is "declined" → SKIP this guest entirely, do not send anything\n` +
-    `- priorOffer.outcome is "interested" → send a warm follow-up that picks up from their ` +
-    `reply (reference the summary), make it feel like a natural continuation of the conversation\n\n` +
+    `- priorOffer.guestReplied is false → SKIP. We already reached out and they haven't replied; ` +
+    `do not send again. One unreplied message is enough.\n` +
+    `- priorOffer.outcome is "declined" → SKIP. They said no; respect that.\n` +
+    `- priorOffer.outcome is "interested" → send ONE warm follow-up that picks up naturally ` +
+    `from their reply (use the summary). This is the only case where a second message is appropriate.\n\n` +
 
     `Message guidelines (all messages):\n` +
     `- Warm and genuine — never automated or templated\n` +
