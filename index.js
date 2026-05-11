@@ -123,12 +123,99 @@ async function createMessageWithRetry(params, maxRetries = 3) {
   }
 }
 
+// ─── Agentic loop ─────────────────────────────────────────────────────────────
+// Reusable helper that runs one complete agentic loop.
+// Applies prompt caching to the system prompt and tool schemas so they are not
+// billed at full price on every subsequent call within the same phase.
+// Returns the final text output from the end_turn response.
+
+async function runAgenticLoop({ systemPrompt, userPrompt, tools, label, maxIterations = 20 }) {
+  const messages = [{ role: 'user', content: userPrompt }];
+
+  // Cache the system prompt — it is identical on every iteration
+  const system = [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }];
+
+  // Cache the tool schemas — mark the last tool so everything up to it is cached
+  const cachedTools = tools.length === 0 ? [] : [
+    ...tools.slice(0, -1),
+    { ...tools[tools.length - 1], cache_control: { type: 'ephemeral' } },
+  ];
+
+  for (let iteration = 1; iteration <= maxIterations; iteration++) {
+    log(`[${label}] API call #${iteration} …`);
+
+    const response = await createMessageWithRetry({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4096,
+      system,
+      ...(cachedTools.length > 0 ? { tools: cachedTools } : {}),
+      messages,
+    });
+
+    const {
+      input_tokens: i = '?',
+      output_tokens: o = '?',
+      cache_creation_input_tokens: cw = 0,
+      cache_read_input_tokens: cr = 0,
+    } = response.usage ?? {};
+    log(`[${label}] stop:${response.stop_reason}  in:${i}  out:${o}  cache_write:${cw}  cache_read:${cr}`);
+
+    messages.push({ role: 'assistant', content: response.content });
+
+    if (response.stop_reason === 'end_turn') {
+      return response.content
+        .filter(b => b.type === 'text')
+        .map(b => b.text)
+        .join('\n');
+    }
+
+    if (response.stop_reason === 'tool_use') {
+      const toolResults = [];
+      for (const block of response.content) {
+        if (block.type !== 'tool_use') continue;
+        let content;
+        try {
+          content = await callHospitableTool(block.name, block.input);
+        } catch (err) {
+          content = `Error calling ${block.name}: ${err.message}`;
+          log(`[${label}] Tool error: ${err.message}`);
+        }
+        toolResults.push({ type: 'tool_result', tool_use_id: block.id, content });
+      }
+      messages.push({ role: 'user', content: toolResults });
+      continue;
+    }
+
+    log(`[${label}] WARNING: Unexpected stop reason "${response.stop_reason}"`);
+    break;
+  }
+
+  log(`[${label}] WARNING: Reached max iterations (${maxIterations}).`);
+  return null;
+}
+
+// ─── JSON extraction ─────────────────────────────────────────────────────────
+// Extracts JSON from Claude's output, handling optional ```json``` code fences.
+
+function extractJSON(text) {
+  if (!text) return null;
+  // Handle ```json ... ``` or ``` ... ``` code blocks
+  const block = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (block) { try { return JSON.parse(block[1]); } catch {} }
+  // Try the whole string as-is
+  try { return JSON.parse(text.trim()); } catch {}
+  // Find the first {...} object in the string
+  const obj = text.match(/\{[\s\S]*\}/);
+  if (obj) { try { return JSON.parse(obj[0]); } catch {} }
+  return null;
+}
+
 // ─── Workflow ─────────────────────────────────────────────────────────────────
 
 async function runVacancyOfferWorkflow() {
   const today    = getToday();
   const tomorrow = getTomorrow();
-  const horizon  = getDaysFromNow(30); // 30-day window keeps context manageable
+  const horizon  = getDaysFromNow(30); // 30-day window keeps Phase 1 context manageable
 
   log('================================================================');
   log('  Spooner House — Evening Gap-Offer Workflow');
@@ -137,165 +224,184 @@ async function runVacancyOfferWorkflow() {
   if (DRY_RUN) log('  ⚠️  DRY RUN — no messages will be sent');
   log('================================================================');
 
-  // Pull only the tools this workflow actually needs.
-  // Passing all 48 Hospitable tool schemas on every API call is the single
-  // biggest driver of token cost — this cuts it by ~85%.
-  const NEEDED_TOOLS = new Set([
+  // Fetch tool schemas once; split into gather vs. send sets.
+  // Keeping the lists small cuts per-call schema overhead by ~85% vs. all 48 tools.
+  const GATHER_TOOL_NAMES = new Set([
     'get-properties',
     'get-reservations',
     'get-reservation',
     'get-property-calendar',
-    'send-reservation-message',
   ]);
+  const SEND_TOOL_NAMES = new Set(['send-reservation-message']);
 
   log('Fetching Hospitable MCP tools …');
-  const allTools = await getHospitableTools();
-  const workflowTools = allTools.filter(t => NEEDED_TOOLS.has(t.name));
-  log(`Using ${workflowTools.length}/${allTools.length} tool(s): ${workflowTools.map(t => t.name).join(', ')}`);
+  const allTools     = await getHospitableTools();
+  const gatherTools  = allTools.filter(t => GATHER_TOOL_NAMES.has(t.name));
+  const sendTools    = allTools.filter(t => SEND_TOOL_NAMES.has(t.name));
+  log(`Gather tools (${gatherTools.length}): ${gatherTools.map(t => t.name).join(', ')}`);
+  log(`Send tools   (${sendTools.length}): ${sendTools.map(t => t.name).join(', ')}`);
 
-  // In dry-run mode, strip the send tool so Claude literally cannot call it.
-  const tools = DRY_RUN
-    ? workflowTools.filter(t => t.name !== 'send-reservation-message')
-    : workflowTools;
+  const systemPrompt =
+    `You are the hospitality assistant for Spooner House, a warm and welcoming bed and breakfast. ` +
+    `You genuinely care about every guest. When writing messages to guests, write with real warmth — ` +
+    `as if you personally know them and are delighted they chose Spooner House.`;
 
-  if (DRY_RUN) {
-    log('DRY RUN: blocked send-reservation-message');
-  }
+  // ── Phase 1: Data gathering ───────────────────────────────────────────────
+  // Claude fetches all reservation data, finds 1-night gaps, checks last-minute
+  // calendars, and returns a COMPACT JSON summary. We then discard this entire
+  // conversation; Phase 2 starts fresh with only the small JSON object.
 
-  const systemPrompt = `You are the hospitality assistant for Spooner House, a warm and welcoming bed \
-and breakfast. You genuinely care about every guest. When writing messages to guests, write with real \
-warmth — as if you personally know them and are delighted they chose Spooner House.`;
+  const phase1Prompt =
+    `Gather opportunity data for Spooner House's nightly gap-offer workflow.\n\n` +
 
-  const userPrompt = `Please complete the following gap-offer workflow for Spooner House B&B:
+    `EFFICIENCY: The get-reservations response includes all the fields you need ` +
+    `(guest name, check-in/out dates, nightly rate). Only call get-reservation for an ` +
+    `individual reservation if a specific field is genuinely absent from the list response — ` +
+    `minimise extra API calls.\n\n` +
 
-**Step 1 — Get properties**
-Fetch all properties/rooms from Hospitable.
+    `**Step 1 — Get properties**\n` +
+    `Fetch all properties.\n\n` +
 
-**Step 2 — 90-day gap scan**
-For EACH property, fetch all reservations with check-in dates between ${today} and ${horizon}. \
-Sort them by check-in date. Identify every consecutive pair (A, B) where reservation A's \
-checkout_date is exactly one night before reservation B's check_in_date — meaning there is \
-exactly one vacant night between them.
+    `**Step 2 — 30-day gap scan (${today} → ${horizon})**\n` +
+    `Fetch all reservations across all properties in a single call. Sort by check-in date ` +
+    `per property. Find every consecutive pair (A, B) where A's checkout_date is exactly ` +
+    `one night before B's check_in_date — meaning there is exactly one vacant night between them.\n\n` +
 
-Build a gap list: { property, gapNight, outgoingReservation (A), incomingReservation (B) }
+    `**Step 3 — Last-minute check (${tomorrow})**\n` +
+    `For each property that has a checkout on ${tomorrow} AND is NOT already covered by a gap ` +
+    `found in Step 2, check the property calendar for ${tomorrow}. If vacant, add to lastMinute.\n\n` +
 
-**Step 3 — ${DRY_RUN ? 'Preview two-sided offers (DRY RUN — do NOT send anything)' : 'Send two-sided offers for every gap'}**
-For each gap found in Step 2, ${DRY_RUN
-  ? `write out the exact messages you WOULD send, but do not call any send or message tool. \
-Output the full message text for both guests so they can be reviewed.`
-  : `send two messages:`}
+    `Return ONLY the following JSON — no other text, no markdown fences, no explanation:\n` +
+    `{\n` +
+    `  "gaps": [\n` +
+    `    {\n` +
+    `      "gapNight": "YYYY-MM-DD",\n` +
+    `      "propertyName": "string",\n` +
+    `      "outgoing": { "reservationId": "string", "guestName": "string", "checkoutDate": "YYYY-MM-DD", "nightlyRate": 0 },\n` +
+    `      "incoming": { "reservationId": "string", "guestName": "string", "checkinDate": "YYYY-MM-DD", "nightlyRate": 0 }\n` +
+    `    }\n` +
+    `  ],\n` +
+    `  "lastMinute": [\n` +
+    `    {\n` +
+    `      "propertyName": "string",\n` +
+    `      "outgoing": { "reservationId": "string", "guestName": "string", "checkoutDate": "YYYY-MM-DD", "nightlyRate": 0 }\n` +
+    `    }\n` +
+    `  ]\n` +
+    `}\n` +
+    `If there are no opportunities tonight, return exactly: {"gaps":[],"lastMinute":[]}`;
 
-  a) Message reservation A's guest (outgoing): a warm offer to extend their stay one more night \
-(the gap night) at 20% off their current nightly rate. Include the shortcode %guest_portal% as \
-a clickable link so they can easily take action through the Spooner House guest portal.
-
-  b) Message reservation B's guest (incoming): a warm offer to arrive one night early (the gap \
-night) at 20% off their current nightly rate. Include the shortcode %guest_portal% as a clickable \
-link so they can easily take action through the Spooner House guest portal.
-
-Only ever offer the guest their exact same room — never suggest a different property.
-
-**Step 4 — Last-minute layer (tomorrow's checkouts)**
-Find all reservations checking out on ${tomorrow}. For each one:
-- If that reservation was ALREADY messaged in Step 3 (it was the outgoing side of a detected gap), \
-skip it — the guest has already been contacted.
-- Otherwise, check that property's Hospitable calendar for ${tomorrow}. If the night is vacant, \
-${DRY_RUN
-  ? `write out the last-minute message you WOULD send but do not call any send tool.`
-  : `send a last-minute extension offer.`} Include the shortcode %SmartUpsell% in the message \
-so the guest can self-serve early check-out, a late check-out, or an extra night directly through \
-the Hospitable guest portal.
-
-**Message guidelines (all messages)**
-Every message must:
-- Feel warm and genuine — never automated or templated
-- Be a short and simple as possible while still being warm
-- State clearly: one extra night, 20% off their current nightly rate
-- Be written as casual and person-to-person, avoiding sales and marketing speech like "low offer", "for just", "limited time", "peacful", "lovely opportunity"
-- Invite the guest to reply if they are interested, do not send them to the guest portal
-- Invite them to reply if interested
-- Outgoing guests: frame as "extend your stay a little bit more"
-- Incoming guests: frame as "we have an unexpected night avaialable if you want to come early"
-
-**Step 5 — Summary log**
-${DRY_RUN ? '**THIS WAS A DRY RUN — no messages were sent**\n\n' : ''}\
-Provide a clear summary:
-- All gaps found (property, gap night, outgoing guest name, incoming guest name)
-- For each gap: the two messages ${DRY_RUN ? 'that WOULD have been sent' : 'sent'} (outgoing + incoming)
-- Last-minute results: sent / skipped-already-handled / room-occupied — one line per checkout
-- Any errors or unexpected results`;
-
-  const messages = [{ role: 'user', content: userPrompt }];
-  let iteration = 0;
-  const MAX_ITERATIONS = 30;
-
+  log('\n── Phase 1: Data gathering ─────────────────────────────────────────');
+  let phase1Output;
   try {
-    while (iteration < MAX_ITERATIONS) {
-      iteration++;
-      log(`API call #${iteration} …`);
-
-      const response = await createMessageWithRetry({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 4096,
-        system: systemPrompt,
-        tools,
-        messages,
-      });
-
-      const { input_tokens: i = '?', output_tokens: o = '?' } = response.usage ?? {};
-      log(`Stop reason: ${response.stop_reason}  |  tokens in: ${i}  out: ${o}`);
-
-      // Always append the full assistant turn before looping
-      messages.push({ role: 'assistant', content: response.content });
-
-      // ── Done ─────────────────────────────────────────────────────────────
-      if (response.stop_reason === 'end_turn') {
-        for (const block of response.content) {
-          if (block.type === 'text') {
-            log('\n─── Workflow summary ───────────────────────────────────────────');
-            console.log(block.text);
-            log('────────────────────────────────────────────────────────────────');
-          }
-        }
-        log('Vacancy offer workflow completed successfully.');
-        return;
-      }
-
-      // ── Tool calls ───────────────────────────────────────────────────────
-      if (response.stop_reason === 'tool_use') {
-        const toolResults = [];
-        for (const block of response.content) {
-          if (block.type !== 'tool_use') continue;
-          let content;
-          try {
-            content = await callHospitableTool(block.name, block.input);
-          } catch (err) {
-            content = `Error calling ${block.name}: ${err.message}`;
-            log(`  Tool error: ${err.message}`);
-          }
-          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content });
-        }
-        messages.push({ role: 'user', content: toolResults });
-        continue;
-      }
-
-      log(`WARNING: Unexpected stop reason "${response.stop_reason}" — stopping loop`);
-      break;
-    }
-
-    if (iteration >= MAX_ITERATIONS) {
-      log('WARNING: Reached maximum iteration limit. Workflow may be incomplete.');
-    }
-  } catch (error) {
-    if (error instanceof Anthropic.APIError) {
-      log(`API Error  HTTP ${error.status}: ${error.message}`);
-      if (error.status === 401) log('Hint: Check ANTHROPIC_API_KEY.');
-      if (error.status === 400) log('Hint: Check model ID and request shape.');
+    phase1Output = await runAgenticLoop({
+      systemPrompt,
+      userPrompt: phase1Prompt,
+      tools: gatherTools,
+      label: 'phase1',
+    });
+  } catch (err) {
+    if (err instanceof Anthropic.APIError) {
+      log(`API Error  HTTP ${err.status}: ${err.message}`);
+      if (err.status === 401) log('Hint: Check ANTHROPIC_API_KEY.');
     } else {
-      log(`Error: ${error.message}`);
+      log(`Error: ${err.message}`);
     }
-    throw error;
+    throw err;
   }
+
+  const gapData = extractJSON(phase1Output);
+  if (!gapData) {
+    log('ERROR: Phase 1 did not return parseable JSON. Aborting.');
+    log('Raw Phase 1 output:');
+    console.log(phase1Output);
+    return;
+  }
+
+  const gapCount        = gapData.gaps?.length ?? 0;
+  const lastMinuteCount = gapData.lastMinute?.length ?? 0;
+  log(`Phase 1 complete — gaps found: ${gapCount}  last-minute: ${lastMinuteCount}`);
+
+  if (gapCount + lastMinuteCount === 0) {
+    log('No opportunities tonight — nothing to send. All done.');
+    return;
+  }
+
+  // ── Phase 2: Message sending ──────────────────────────────────────────────
+  // Fresh context — Phase 1's large reservation data is gone.
+  // Claude receives only the compact gap JSON and writes/sends the messages.
+
+  const gapLines = (gapData.gaps ?? []).map(g =>
+    `  • Gap night ${g.gapNight} — ${g.propertyName}\n` +
+    `      Outgoing: ${g.outgoing.guestName} (reservation ${g.outgoing.reservationId}, $${g.outgoing.nightlyRate}/night, checks out ${g.outgoing.checkoutDate})\n` +
+    `      Incoming: ${g.incoming.guestName} (reservation ${g.incoming.reservationId}, $${g.incoming.nightlyRate}/night, checks in ${g.incoming.checkinDate})`
+  ).join('\n');
+
+  const lastMinuteLines = (gapData.lastMinute ?? []).map(lm =>
+    `  • Tomorrow ${lm.outgoing.checkoutDate} — ${lm.propertyName}\n` +
+    `      Outgoing: ${lm.outgoing.guestName} (reservation ${lm.outgoing.reservationId}, $${lm.outgoing.nightlyRate}/night)`
+  ).join('\n');
+
+  const phase2Prompt =
+    `Tonight's gap-offer opportunities for Spooner House:\n\n` +
+
+    (gapLines
+      ? `GAPS — 1-night vacancy between consecutive reservations (send 2 messages each):\n${gapLines}\n\n`
+      : '') +
+
+    (lastMinuteLines
+      ? `LAST-MINUTE — checkout tomorrow, room vacant tomorrow night (send 1 message each):\n${lastMinuteLines}\n\n`
+      : '') +
+
+    (DRY_RUN
+      ? `DRY RUN — Do NOT call send-reservation-message. Instead write out the exact text of ` +
+        `every message you would send, clearly labelled by guest and reservation ID.\n\n`
+      : `Please send all messages now using send-reservation-message.\n\n`) +
+
+    `For each GAP send two messages:\n` +
+    `  a) To the OUTGOING guest: warm offer to stay one more night (the gap night) at 20% off ` +
+    `their nightly rate. Include the shortcode %guest_portal% naturally in the message.\n` +
+    `  b) To the INCOMING guest: warm offer to arrive one night early at 20% off their nightly ` +
+    `rate. Include the shortcode %guest_portal% naturally in the message.\n\n` +
+
+    `For each LAST-MINUTE opportunity send one message:\n` +
+    `  a) To the OUTGOING guest: warm last-minute offer to extend one more night at 20% off. ` +
+    `Include the shortcode %SmartUpsell% naturally in the message.\n\n` +
+
+    `Message guidelines (all messages):\n` +
+    `- Warm and genuine — never templated or robotic\n` +
+    `- Mention "Spooner House" by name\n` +
+    `- State the discount clearly: one extra night, 20% off (= $X/night with the actual dollar amount)\n` +
+    `- Weave the portal/upsell shortcode in naturally — not as a standalone bare code\n` +
+    `- Invite them to reply if interested — absolutely no pressure\n` +
+    `- Outgoing guests: frame as "one more night before you go"\n` +
+    `- Incoming guests: frame as "arrive a night early and settle right in"\n\n` +
+
+    `After ${DRY_RUN ? 'writing all messages' : 'sending all messages'}, provide a brief summary ` +
+    `listing each guest contacted, their property, and the gap/last-minute night.\n` +
+    (DRY_RUN ? `\nTHIS WAS A DRY RUN — no messages were sent.` : '');
+
+  log('\n── Phase 2: Message sending ─────────────────────────────────────────');
+  let phase2Output;
+  try {
+    phase2Output = await runAgenticLoop({
+      systemPrompt,
+      userPrompt: phase2Prompt,
+      tools: DRY_RUN ? [] : sendTools, // no tools needed when just writing previews
+      label: 'phase2',
+    });
+  } catch (err) {
+    if (err instanceof Anthropic.APIError) {
+      log(`API Error  HTTP ${err.status}: ${err.message}`);
+    } else {
+      log(`Error: ${err.message}`);
+    }
+    throw err;
+  }
+
+  log('\n─── Workflow summary ───────────────────────────────────────────────');
+  console.log(phase2Output);
+  log('────────────────────────────────────────────────────────────────────');
+  log('Vacancy offer workflow completed successfully.');
 }
 
 // ─── Scheduler ───────────────────────────────────────────────────────────────
