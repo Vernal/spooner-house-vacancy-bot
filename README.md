@@ -1,6 +1,6 @@
 # Spooner House — Gap Offer Bot
 
-Runs every evening at 7:00 PM Eastern and proactively fills single-night gaps across all upcoming reservations — up to 90 days out. For every 1-night gap between consecutive bookings, it messages both the outgoing guest (extend your stay) and the incoming guest (arrive a night early), each at a 20% discount. A last-minute layer also catches any same-night vacancies that weren't already handled.
+Runs every evening at 7:00 PM Eastern and proactively fills single-night gaps across all upcoming reservations — up to 30 days out. For every 1-night gap between consecutive bookings, it messages both the outgoing guest (extend your stay) and the incoming guest (arrive a night early), each at a 20% discount. A last-minute layer also catches any same-night vacancies that weren't already handled.
 
 ## How it works
 

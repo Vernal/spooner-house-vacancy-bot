@@ -103,16 +103,36 @@ async function callHospitableTool(name, input) {
     .join('\n') || 'Done.';
 }
 
+// ─── API helpers ─────────────────────────────────────────────────────────────
+
+// Wraps client.messages.create with retry logic for 429 rate-limit errors.
+// Waits 65 s per attempt (slightly more than Anthropic's 1-minute window).
+async function createMessageWithRetry(params, maxRetries = 3) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await client.messages.create(params);
+    } catch (err) {
+      if (err instanceof Anthropic.APIError && err.status === 429 && attempt < maxRetries) {
+        const waitSec = 65 * (attempt + 1); // 65 s, 130 s, 195 s
+        log(`Rate limit (429) — waiting ${waitSec}s before retry ${attempt + 1}/${maxRetries} …`);
+        await new Promise(resolve => setTimeout(resolve, waitSec * 1000));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 // ─── Workflow ─────────────────────────────────────────────────────────────────
 
 async function runVacancyOfferWorkflow() {
   const today    = getToday();
   const tomorrow = getTomorrow();
-  const horizon  = getDaysFromNow(90);
+  const horizon  = getDaysFromNow(30); // 30-day window keeps context manageable
 
   log('================================================================');
   log('  Spooner House — Evening Gap-Offer Workflow');
-  log(`  Today: ${today}  |  Scanning gaps through: ${horizon}`);
+  log(`  Today: ${today}  |  Scanning gaps through: ${horizon} (30 days)`);
   log(`  Last-minute layer: ${tomorrow}`);
   if (DRY_RUN) log('  ⚠️  DRY RUN — no messages will be sent');
   log('================================================================');
@@ -209,7 +229,7 @@ Provide a clear summary:
       iteration++;
       log(`API call #${iteration} …`);
 
-      const response = await client.messages.create({
+      const response = await createMessageWithRetry({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 4096,
         system: systemPrompt,
