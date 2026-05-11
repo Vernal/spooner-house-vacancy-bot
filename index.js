@@ -292,14 +292,14 @@ async function runVacancyOfferWorkflow() {
     `    {\n` +
     `      "gapNight": "YYYY-MM-DD",\n` +
     `      "propertyName": "string",\n` +
-    `      "outgoing": { "reservationId": "string", "guestName": "string", "checkoutDate": "YYYY-MM-DD", "nightlyRate": 0, "priorOffer": null },\n` +
+    `      "outgoing": { "reservationId": "string", "guestName": "string", "checkinDate": "YYYY-MM-DD", "checkoutDate": "YYYY-MM-DD", "nightlyRate": 0, "priorOffer": null },\n` +
     `      "incoming": { "reservationId": "string", "guestName": "string", "checkinDate": "YYYY-MM-DD", "nightlyRate": 0, "priorOffer": null }\n` +
     `    }\n` +
     `  ],\n` +
     `  "lastMinute": [\n` +
     `    {\n` +
     `      "propertyName": "string",\n` +
-    `      "outgoing": { "reservationId": "string", "guestName": "string", "checkoutDate": "YYYY-MM-DD", "nightlyRate": 0, "priorOffer": null }\n` +
+    `      "outgoing": { "reservationId": "string", "guestName": "string", "checkinDate": "YYYY-MM-DD", "checkoutDate": "YYYY-MM-DD", "nightlyRate": 0, "priorOffer": null }\n` +
     `    }\n` +
     `  ]\n` +
     `}\n` +
@@ -380,6 +380,13 @@ async function runVacancyOfferWorkflow() {
     `For each LAST-MINUTE opportunity send one message:\n` +
     `  a) To the OUTGOING guest: offer to extend their stay one more night at 20% off.\n\n` +
 
+    `Today's date is ${today}.\n\n` +
+    `TIMING RULE for outgoing guests (extension offers only):\n` +
+    `Only send an extension offer if the guest has already been there for at least one full night — ` +
+    `i.e. their checkinDate is strictly before today (checkinDate < ${today}). ` +
+    `If they checked in today or haven't arrived yet, skip their outgoing offer entirely. ` +
+    `The bot runs every night, so it will naturally reach them once they've had a night to settle in. ` +
+    `This rule does NOT apply to incoming guests (arrive-early offers) — those can go out at any time.\n\n` +
     `Before sending each message, check the guest's priorOffer field:\n` +
     `- priorOffer is null → send a normal first-time offer\n` +
     `- priorOffer.guestReplied is false → SKIP. We already reached out and they haven't replied; ` +
