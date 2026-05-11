@@ -1,5 +1,4 @@
 import Anthropic from '@anthropic-ai/sdk';
-import cron from 'node-cron';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -439,29 +438,12 @@ async function runVacancyOfferWorkflow() {
   log('Vacancy offer workflow completed successfully.');
 }
 
-// ─── Scheduler ───────────────────────────────────────────────────────────────
+// ─── Run ─────────────────────────────────────────────────────────────────────
+// Railway Cron starts this process on schedule, so we just run once and exit.
 
-cron.schedule(
-  '0 19 * * *',
-  () => {
-    log('Cron fired — starting vacancy offer workflow …');
-    runVacancyOfferWorkflow().catch(err => log(`Workflow failed: ${err.message}`));
-  },
-  { timezone: 'America/New_York' },
-);
-
-log('Spooner House vacancy bot is running.');
-log('Scheduled: daily at 7:00 PM Eastern (America/New_York).');
-
-// ─── Manual run ──────────────────────────────────────────────────────────────
-
-if (process.argv.includes('--run-now') || process.env.RUN_NOW === 'true') {
-  log(process.env.RUN_NOW === 'true'
-    ? 'RUN_NOW env var detected — executing workflow immediately …'
-    : '--run-now flag detected — executing workflow immediately …'
-  );
-  runVacancyOfferWorkflow().catch(err => {
+runVacancyOfferWorkflow()
+  .then(() => process.exit(0))
+  .catch(err => {
     log(`Workflow failed: ${err.message}`);
     process.exit(1);
   });
-}

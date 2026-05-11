@@ -1,0 +1,3 @@
+[deploy]
+startCommand = "node index.js"
+cronSchedule = "0 23 * * *"

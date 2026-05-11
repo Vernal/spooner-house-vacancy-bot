@@ -1,16 +1,17 @@
 # Spooner House — Gap Offer Bot
 
-Runs every evening at 7:00 PM Eastern and proactively fills single-night gaps across all upcoming reservations — up to 30 days out. For every 1-night gap between consecutive bookings, it messages both the outgoing guest (extend your stay) and the incoming guest (arrive a night early), each at a 20% discount. A last-minute layer also catches any same-night vacancies that weren't already handled.
+Runs every evening and proactively fills single-night gaps across all upcoming reservations — up to 30 days out. For every 1-night gap between consecutive bookings, it messages both the outgoing guest (extend your stay) and the incoming guest (arrive a night early), each at 20% off. A last-minute layer also catches any same-night vacancies not already handled.
 
 ## How it works
 
 1. Fetches all properties from Hospitable
-2. For each property, fetches all reservations over the next 90 days and finds consecutive pairs with exactly one vacant night between them
-3. For each gap, sends two warm personal messages at 20% off — one to the outgoing guest offering to extend, one to the incoming guest offering to arrive early; both include a `%guest_portal%` link so guests can take action directly in the Hospitable portal
-4. As a last-minute layer, checks tomorrow's checkouts — any room not already handled by the gap scan gets a last-minute extension offer with a `%SmartUpsell%` link for early/late checkout options
-5. Logs a full summary of every gap found, every message sent, and any rooms that were already occupied
+2. For each property, fetches all reservations over the next 30 days and finds consecutive pairs with exactly one vacant night between them
+3. For each gap, sends two warm personal messages at 20% off — one to the outgoing guest offering to extend, one to the incoming guest offering to arrive early
+4. As a last-minute layer, checks tomorrow's checkouts — any room not already handled by the gap scan gets a last-minute extension offer
+5. Checks conversation history before sending — skips guests who already have an unreplied offer or have declined; sends a warm follow-up only if they showed interest
+6. Applies a timing rule: extension offers only go to guests who have already been there at least one night (or are checking out tomorrow — their only window)
 
-Claude uses the [Hospitable MCP server](https://mcp.hospitable.com/mcp) to read reservations, check calendars, and send messages — all in a single agentic loop.
+Claude uses the [Hospitable MCP server](https://mcp.hospitable.com/mcp) to read reservations, check calendars, and send messages across two agentic phases: data gathering (discarded after) and message sending (starts fresh with a compact summary). This keeps token usage low.
 
 ---
 
@@ -19,7 +20,6 @@ Claude uses the [Hospitable MCP server](https://mcp.hospitable.com/mcp) to read 
 - Node.js 18 or later
 - An [Anthropic API key](https://console.anthropic.com)
 - A [Hospitable MCP Fallback Bearer token](https://my.hospitable.com/integrations/mcp)
-
 
 ### Environment variables
 
@@ -32,13 +32,15 @@ Claude uses the [Hospitable MCP server](https://mcp.hospitable.com/mcp) to read 
 
 ## Dry run / testing mode
 
-Set `DRY_RUN=true` in your environment to run the full workflow every evening without sending any messages. Claude will still fetch all properties, find checkouts, and check calendars — but instead of calling the send-message tool it will write out exactly what it would have sent. Check the Railway logs each morning to verify the logic looks right.
+Set `DRY_RUN=true` in your environment to run the full workflow without sending any messages. Claude will still fetch all properties, find gaps, and check calendars — but instead of calling the send-message tool it will write out exactly what it would have sent. Check the Railway logs after each run to verify the logic looks right.
 
-When you're satisfied after a week or two, go to Railway → **Variables**, delete `DRY_RUN` (or set it to `false`), and the bot goes live on the next 7 PM run.
+When you're satisfied, go to Railway → **Variables**, delete `DRY_RUN` (or set it to `false`), and the bot goes live on the next scheduled run.
 
 ---
 
 ## Deploying to Railway
+
+The bot is designed to run as a **Railway Cron service** — it spins up, runs the workflow, and shuts itself down. You only pay for the ~30 seconds it actually runs.
 
 ### 1. Push to GitHub
 
@@ -55,7 +57,8 @@ gh repo create spooner-house-vacancy-bot --private --push
 
 1. Go to [railway.app](https://railway.app) and click **New Project**
 2. Choose **Deploy from GitHub repo** and select your repo
-3. Railway will detect the `Procfile` and deploy a **worker** (no web port needed)
+3. In the service settings, set the service type to **Cron**
+4. Railway will read the schedule from `railway.toml` (`0 23 * * *` UTC — approximately 7 PM Eastern)
 
 ### 3. Set environment variables in Railway
 
@@ -71,41 +74,48 @@ HOSPITABLE_API_TOKEN=your_hospitable_token
 Railway's **Logs** tab will show timestamped output like:
 
 ```
-[2025-05-08T23:00:00.000Z] Cron fired — starting vacancy offer workflow …
-[2025-05-08T23:00:01.123Z] API call #1 …
-[2025-05-08T23:00:12.345Z] Stop reason: end_turn  |  tokens in: 3241  out: 891
-[2025-05-08T23:00:12.346Z] ─── Workflow summary ───────────────────────────────────────────
-Gaps found (90-day scan):
-  May 12 — The Oak Room: gap night between Chen checkout (May 12) and Patel check-in (May 13)
-    → Outgoing offer sent to Sarah & Tom Chen ✓
-    → Incoming offer sent to Raj Patel ✓
-  May 19 — The Garden Suite: gap night between Lopez checkout (May 19) and Kim check-in (May 20)
-    → Outgoing offer sent to Maria Lopez ✓
-    → Incoming offer sent to Jin Kim ✓
-Last-minute layer (tomorrow May 9):
-  The Birch Room — already booked tomorrow, no offer sent
-[2025-05-08T23:00:12.347Z] Vacancy offer workflow completed successfully.
+[2025-05-11T23:00:01.123Z] Spooner House — Evening Gap-Offer Workflow
+[2025-05-11T23:00:01.124Z] Today: 2025-05-11  |  Scanning gaps through: 2025-06-10 (30 days)
+[2025-05-11T23:00:01.125Z] Fetching Hospitable MCP tools …
+
+── Phase 1: Data gathering ──────────────────────────────────────────
+[2025-05-11T23:00:02.001Z] [phase1] API call #1 …
+[2025-05-11T23:00:05.312Z] [phase1] stop:tool_use  in:2847  out:312  cache_write:2103  cache_read:0
+  → MCP: get-properties  {}
+[2025-05-11T23:00:06.891Z] [phase1] API call #2 …
+...
+[2025-05-11T23:00:18.001Z] Phase 1 complete — gaps found: 1  last-minute: 0
+
+── Phase 2: Message sending ─────────────────────────────────────────
+[2025-05-11T23:00:18.002Z] [phase2] API call #1 …
+[2025-05-11T23:00:22.441Z] [phase2] stop:end_turn  in:821  out:243  cache_write:612  cache_read:0
+
+─── Workflow summary ────────────────────────────────────────────────
+Gap night May 21 — Gates Room
+  → Outgoing offer sent to Gabriela De Lima ✓
+  → Incoming offer sent to Riccardo Gulia ✓
+[2025-05-11T23:00:22.442Z] Vacancy offer workflow completed successfully.
 ```
 
-### 5. Force a manual run on Railway
+### 5. Force a manual run
 
-In the Railway dashboard → **Deploy** tab → click the **Run** button, or use the Railway CLI:
+In the Railway dashboard → **Deploy** tab → click **Deploy**, or use the Railway CLI:
 
 ```bash
-railway run node index.js --run-now
+node index.js
 ```
 
 ---
 
 ## Scheduling notes
 
-The cron expression `0 19 * * *` fires at exactly **7:00 PM** in the `America/New_York` timezone (Eastern — handles EST/EDT automatically). Railway runs the worker process continuously, so the cron job inside Node fires on time.
+The schedule is defined in `railway.toml` as `0 23 * * *` UTC. This is approximately 7 PM Eastern — exactly 7 PM during EDT (summer) and 6 PM during EST (winter). For a once-a-night offer workflow the one-hour seasonal shift doesn't matter much. If you want to adjust it, edit `railway.toml`.
 
 ---
 
 ## Model
 
-The bot uses `claude-sonnet-4-20250514`. To upgrade to the latest Sonnet release, change the `model` field in `index.js` to `claude-sonnet-4-6`.
+The bot uses `claude-sonnet-4-20250514`. To upgrade to the latest Sonnet release, change the `model` field in `index.js`.
 
 ---
 
@@ -114,6 +124,6 @@ The bot uses `claude-sonnet-4-20250514`. To upgrade to the latest Sonnet release
 | Error | Fix |
 |---|---|
 | `HTTP 401` | Verify `ANTHROPIC_API_KEY` and `HOSPITABLE_API_TOKEN` are set correctly |
-| `HTTP 400` with MCP error | Check that the `mcp-client-2025-04-04` beta header is still current — Anthropic occasionally updates beta identifiers |
-| Offers sent to guests in wrong timezone | The "tomorrow" calculation uses UTC midnight; review `getTomorrow()` if your guests' checkouts span midnight in your local time |
-| Workflow hits iteration limit | Increase `MAX_ITERATIONS` in `index.js` (default: 30) |
+| Phase 1 returns no JSON | Check Railway logs for a raw Claude response — usually means the prompt hit an edge case; run with `DRY_RUN=true` to debug |
+| Offers sent to wrong guests | Run with `DRY_RUN=true` and review the Phase 1 JSON output in the logs |
+| Workflow hits iteration limit | Increase `maxIterations` in the `runAgenticLoop()` call inside `runVacancyOfferWorkflow()` (default: 20) |
