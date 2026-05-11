@@ -263,11 +263,11 @@ async function runVacancyOfferWorkflow() {
     `Fetch all properties.\n\n` +
 
     `**Step 2 — 30-day gap scan (${today} → ${horizon})**\n` +
-    `You need ALL reservations that overlap with the scan window — including reservations that ` +
-    `checked in BEFORE today but check out within the window. Make two get-reservations calls:\n` +
-    `  a) check_in_gte: ${today}, check_in_lte: ${horizon}  (upcoming reservations)\n` +
-    `  b) check_out_gte: ${today}, check_out_lte: ${horizon}  (currently-active reservations checking out soon)\n` +
-    `Merge and deduplicate the results. Sort by check-in date per property. ` +
+    `Fetch ALL reservations across all properties for this window. Use per_page:100 to maximise ` +
+    `results per call. IMPORTANT: check the response for pagination metadata — if there are more ` +
+    `pages, keep fetching until you have every reservation. Missing even one reservation will cause ` +
+    `a gap to go undetected.\n` +
+    `Once you have the complete list, sort by check-in date per property. ` +
     `Find every consecutive pair (A, B) where A's checkout_date is exactly ` +
     `one night before B's check_in_date — meaning there is exactly one vacant night between them.\n\n` +
 
