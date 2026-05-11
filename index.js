@@ -231,6 +231,7 @@ async function runVacancyOfferWorkflow() {
     'get-reservations',
     'get-reservation',
     'get-property-calendar',
+    'get-reservation-messages',
   ]);
   const SEND_TOOL_NAMES = new Set(['send-reservation-message']);
 
@@ -275,24 +276,35 @@ async function runVacancyOfferWorkflow() {
     `For each property that has a checkout on ${tomorrow} AND is NOT already covered by a gap ` +
     `found in Step 2, check the property calendar for ${tomorrow}. If vacant, add to lastMinute.\n\n` +
 
+    `**Step 4 — Check message history for each identified reservation**\n` +
+    `For every reservation appearing in the gap or lastMinute lists, call get-reservation-messages ` +
+    `to fetch that reservation's conversation history. Look for any previous messages from us ` +
+    `that offered an early arrival, extended stay, or extra night at a discount. Summarise what ` +
+    `happened into a "priorOffer" object:\n` +
+    `  - null if no such offer was ever sent\n` +
+    `  - { "sentAt": "YYYY-MM-DD", "guestReplied": false } if we sent an offer and heard nothing back\n` +
+    `  - { "sentAt": "YYYY-MM-DD", "guestReplied": true, "outcome": "declined" } if they said no\n` +
+    `  - { "sentAt": "YYYY-MM-DD", "guestReplied": true, "outcome": "interested", "summary": "..." } if they showed interest or uncertainty\n\n` +
+
     `Return ONLY the following JSON — no other text, no markdown fences, no explanation:\n` +
     `{\n` +
     `  "gaps": [\n` +
     `    {\n` +
     `      "gapNight": "YYYY-MM-DD",\n` +
     `      "propertyName": "string",\n` +
-    `      "outgoing": { "reservationId": "string", "guestName": "string", "checkoutDate": "YYYY-MM-DD", "nightlyRate": 0 },\n` +
-    `      "incoming": { "reservationId": "string", "guestName": "string", "checkinDate": "YYYY-MM-DD", "nightlyRate": 0 }\n` +
+    `      "outgoing": { "reservationId": "string", "guestName": "string", "checkoutDate": "YYYY-MM-DD", "nightlyRate": 0, "priorOffer": null },\n` +
+    `      "incoming": { "reservationId": "string", "guestName": "string", "checkinDate": "YYYY-MM-DD", "nightlyRate": 0, "priorOffer": null }\n` +
     `    }\n` +
     `  ],\n` +
     `  "lastMinute": [\n` +
     `    {\n` +
     `      "propertyName": "string",\n` +
-    `      "outgoing": { "reservationId": "string", "guestName": "string", "checkoutDate": "YYYY-MM-DD", "nightlyRate": 0 }\n` +
+    `      "outgoing": { "reservationId": "string", "guestName": "string", "checkoutDate": "YYYY-MM-DD", "nightlyRate": 0, "priorOffer": null }\n` +
     `    }\n` +
     `  ]\n` +
     `}\n` +
     `If there are no opportunities tonight, return exactly: {"gaps":[],"lastMinute":[]}`;
+
 
   log('\n── Phase 1: Data gathering ─────────────────────────────────────────');
   let phase1Output;
@@ -367,6 +379,14 @@ async function runVacancyOfferWorkflow() {
 
     `For each LAST-MINUTE opportunity send one message:\n` +
     `  a) To the OUTGOING guest: offer to extend their stay one more night at 20% off.\n\n` +
+
+    `Before sending each message, check the guest's priorOffer field:\n` +
+    `- priorOffer is null → send a normal first-time offer\n` +
+    `- priorOffer.guestReplied is false → send a brief, light follow-up that acknowledges ` +
+    `we mentioned this before ("just wanted to circle back…"), no pressure\n` +
+    `- priorOffer.outcome is "declined" → SKIP this guest entirely, do not send anything\n` +
+    `- priorOffer.outcome is "interested" → send a warm follow-up that picks up from their ` +
+    `reply (reference the summary), make it feel like a natural continuation of the conversation\n\n` +
 
     `Message guidelines (all messages):\n` +
     `- Warm and genuine — never automated or templated\n` +
