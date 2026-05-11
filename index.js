@@ -228,11 +228,13 @@ async function runVacancyOfferWorkflow() {
   const GATHER_TOOL_NAMES = new Set([
     'get-properties',
     'get-reservations',
-    'get-reservation',
     'get-property-calendar',
     'get-reservation-messages',
   ]);
-  const SEND_TOOL_NAMES = new Set(['send-reservation-message']);
+  // get-reservation is intentionally NOT in gather tools — keeping it out prevents
+  // Claude from making individual reservation lookups during the scan (which blows
+  // up the iteration count). Phase 2 can do 1-2 targeted lookups if nightlyRate is null.
+  const SEND_TOOL_NAMES = new Set(['get-reservation', 'send-reservation-message']);
 
   log('Fetching Hospitable MCP tools …');
   const allTools     = await getHospitableTools();
@@ -254,13 +256,10 @@ async function runVacancyOfferWorkflow() {
   const phase1Prompt =
     `Gather opportunity data for Spooner House's nightly gap-offer workflow.\n\n` +
 
-    `EFFICIENCY RULES — read carefully:\n` +
-    `- During the gap scan (Step 2): use ONLY the get-reservations list data. Do NOT call ` +
-    `get-reservation for individual reservations, even if nightlyRate is missing. Just set ` +
-    `nightlyRate to null and keep going — gap detection only needs check-in/out dates.\n` +
-    `- After gaps are identified (Steps 3–4): for reservations in the gap or lastMinute lists, ` +
-    `you MAY call get-reservation if guestName or nightlyRate is null. But ALWAYS pull ` +
-    `checkinDate and checkoutDate from the list data — they are always present there.\n\n` +
+    `EFFICIENCY: You do not have a get-reservation tool. Use only the data returned by ` +
+    `get-reservations. If nightlyRate is not present in the list data, set it to null — ` +
+    `gap detection only needs check-in/out dates. Always populate checkinDate and checkoutDate ` +
+    `from the list data (they are always present).\n\n` +
 
     `**Step 1 — Get properties**\n` +
     `Fetch all properties.\n\n` +
@@ -348,15 +347,17 @@ async function runVacancyOfferWorkflow() {
   // Fresh context — Phase 1's large reservation data is gone.
   // Claude receives only the compact gap JSON and writes/sends the messages.
 
+  const fmtRate = r => r != null ? `$${r}/night` : `rate unknown (look up with get-reservation)`;
+
   const gapLines = (gapData.gaps ?? []).map(g =>
     `  • Gap night ${g.gapNight} — ${g.propertyName}\n` +
-    `      Outgoing: ${g.outgoing.guestName} (reservation ${g.outgoing.reservationId}, $${g.outgoing.nightlyRate}/night, checks out ${g.outgoing.checkoutDate})\n` +
-    `      Incoming: ${g.incoming.guestName} (reservation ${g.incoming.reservationId}, $${g.incoming.nightlyRate}/night, checks in ${g.incoming.checkinDate})`
+    `      Outgoing: ${g.outgoing.guestName} (reservation ${g.outgoing.reservationId}, ${fmtRate(g.outgoing.nightlyRate)}, checks out ${g.outgoing.checkoutDate}, checkin ${g.outgoing.checkinDate})\n` +
+    `      Incoming: ${g.incoming.guestName} (reservation ${g.incoming.reservationId}, ${fmtRate(g.incoming.nightlyRate)}, checks in ${g.incoming.checkinDate})`
   ).join('\n');
 
   const lastMinuteLines = (gapData.lastMinute ?? []).map(lm =>
     `  • Tomorrow ${lm.outgoing.checkoutDate} — ${lm.propertyName}\n` +
-    `      Outgoing: ${lm.outgoing.guestName} (reservation ${lm.outgoing.reservationId}, $${lm.outgoing.nightlyRate}/night)`
+    `      Outgoing: ${lm.outgoing.guestName} (reservation ${lm.outgoing.reservationId}, ${fmtRate(lm.outgoing.nightlyRate)}, checkin ${lm.outgoing.checkinDate})`
   ).join('\n');
 
   const phase2Prompt =
@@ -369,6 +370,9 @@ async function runVacancyOfferWorkflow() {
     (lastMinuteLines
       ? `LAST-MINUTE — checkout tomorrow, room vacant tomorrow night (send 1 message each):\n${lastMinuteLines}\n\n`
       : '') +
+
+    `If any guest's nightlyRate is null, call get-reservation with include=financials for ` +
+    `that reservation ID to look up the rate before writing the message.\n\n` +
 
     (DRY_RUN
       ? `DRY RUN — Do NOT call send-reservation-message. Instead write out the exact text of ` +
