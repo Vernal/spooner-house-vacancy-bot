@@ -203,11 +203,9 @@ the Hospitable guest portal.
 **Message guidelines (all messages)**
 Every message must:
 - Feel warm and genuine — never automated or templated
-- Mention "Spooner House" by name
-- Express authentic delight that they chose to stay with us
-- Frame the offer as a special treat, not a hard sell
+- Be a short and simple as possible while still being warm
 - State clearly: one extra night, 20% off their current nightly rate
-- Include the relevant portal/upsell link shortcode naturally in the message body
+- Invite the guest to reply if they are interested, do not send them to the guest portal
 - Invite them to reply if interested — no pressure
 - Outgoing guests: frame as "one more night before you go"
 - Incoming guests: frame as "arrive a night early and settle right in"
