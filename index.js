@@ -255,10 +255,13 @@ async function runVacancyOfferWorkflow() {
   const phase1Prompt =
     `Gather opportunity data for Spooner House's nightly gap-offer workflow.\n\n` +
 
-    `EFFICIENCY: The get-reservations response includes all the fields you need ` +
-    `(guest name, check-in/out dates, nightly rate). Only call get-reservation for an ` +
-    `individual reservation if a specific field is genuinely absent from the list response — ` +
-    `minimise extra API calls.\n\n` +
+    `EFFICIENCY RULES — read carefully:\n` +
+    `- During the gap scan (Step 2): use ONLY the get-reservations list data. Do NOT call ` +
+    `get-reservation for individual reservations, even if nightlyRate is missing. Just set ` +
+    `nightlyRate to null and keep going — gap detection only needs check-in/out dates.\n` +
+    `- After gaps are identified (Steps 3–4): for reservations in the gap or lastMinute lists, ` +
+    `you MAY call get-reservation if guestName or nightlyRate is null. But ALWAYS pull ` +
+    `checkinDate and checkoutDate from the list data — they are always present there.\n\n` +
 
     `**Step 1 — Get properties**\n` +
     `Fetch all properties.\n\n` +
@@ -292,14 +295,14 @@ async function runVacancyOfferWorkflow() {
     `    {\n` +
     `      "gapNight": "YYYY-MM-DD",\n` +
     `      "propertyName": "string",\n` +
-    `      "outgoing": { "reservationId": "string", "guestName": "string", "checkinDate": "YYYY-MM-DD", "checkoutDate": "YYYY-MM-DD", "nightlyRate": 0, "priorOffer": null },\n` +
-    `      "incoming": { "reservationId": "string", "guestName": "string", "checkinDate": "YYYY-MM-DD", "nightlyRate": 0, "priorOffer": null }\n` +
+    `      "outgoing": { "reservationId": "string", "guestName": "string", "checkinDate": "YYYY-MM-DD (REQUIRED — always populate from reservation list data)", "checkoutDate": "YYYY-MM-DD (REQUIRED)", "nightlyRate": 0, "priorOffer": null },\n` +
+    `      "incoming": { "reservationId": "string", "guestName": "string", "checkinDate": "YYYY-MM-DD (REQUIRED)", "nightlyRate": 0, "priorOffer": null }\n` +
     `    }\n` +
     `  ],\n` +
     `  "lastMinute": [\n` +
     `    {\n` +
     `      "propertyName": "string",\n` +
-    `      "outgoing": { "reservationId": "string", "guestName": "string", "checkinDate": "YYYY-MM-DD", "checkoutDate": "YYYY-MM-DD", "nightlyRate": 0, "priorOffer": null }\n` +
+    `      "outgoing": { "reservationId": "string", "guestName": "string", "checkinDate": "YYYY-MM-DD (REQUIRED)", "checkoutDate": "YYYY-MM-DD (REQUIRED)", "nightlyRate": 0, "priorOffer": null }\n` +
     `    }\n` +
     `  ]\n` +
     `}\n` +
@@ -382,10 +385,13 @@ async function runVacancyOfferWorkflow() {
 
     `Today's date is ${today}.\n\n` +
     `TIMING RULE for outgoing guests (extension offers only):\n` +
-    `Only send an extension offer if the guest has already been there for at least one full night — ` +
+    `Default: only send an extension offer if the guest has already been there for at least one full night — ` +
     `i.e. their checkinDate is strictly before today (checkinDate < ${today}). ` +
-    `If they checked in today or haven't arrived yet, skip their outgoing offer entirely. ` +
-    `The bot runs every night, so it will naturally reach them once they've had a night to settle in. ` +
+    `If they checked in today or haven't arrived yet, skip their outgoing offer — ` +
+    `the bot runs every night, so it will naturally reach them once they've had a night to settle in.\n` +
+    `EXCEPTION: if the guest's checkoutDate is ${tomorrow} (i.e. tonight is their last night), ` +
+    `send the offer regardless of when they checked in — this is the only window available for ` +
+    `one-night stays and short stays where the gap falls right after checkout.\n` +
     `This rule does NOT apply to incoming guests (arrive-early offers) — those can go out at any time.\n\n` +
     `Before sending each message, check the guest's priorOffer field:\n` +
     `- priorOffer is null → send a normal first-time offer\n` +
