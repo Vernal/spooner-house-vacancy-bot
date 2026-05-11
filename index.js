@@ -362,23 +362,21 @@ async function runVacancyOfferWorkflow() {
       : `Please send all messages now using send-reservation-message.\n\n`) +
 
     `For each GAP send two messages:\n` +
-    `  a) To the OUTGOING guest: warm offer to stay one more night (the gap night) at 20% off ` +
-    `their nightly rate. Include the shortcode %guest_portal% naturally in the message.\n` +
-    `  b) To the INCOMING guest: warm offer to arrive one night early at 20% off their nightly ` +
-    `rate. Include the shortcode %guest_portal% naturally in the message.\n\n` +
+    `  a) To the OUTGOING guest: offer to extend their stay one more night (the gap night) at 20% off.\n` +
+    `  b) To the INCOMING guest: let them know there is an unexpected night available if they want to arrive early, at 20% off.\n\n` +
 
     `For each LAST-MINUTE opportunity send one message:\n` +
-    `  a) To the OUTGOING guest: warm last-minute offer to extend one more night at 20% off. ` +
-    `Include the shortcode %SmartUpsell% naturally in the message.\n\n` +
+    `  a) To the OUTGOING guest: offer to extend their stay one more night at 20% off.\n\n` +
 
     `Message guidelines (all messages):\n` +
-    `- Warm and genuine — never templated or robotic\n` +
+    `- Warm and genuine — never automated or templated\n` +
+    `- Short and simple — as brief as possible while still feeling personal\n` +
+    `- Casual and person-to-person — avoid any sales or marketing language such as "low offer", "for just", "limited time", "peaceful", "lovely opportunity"\n` +
     `- Mention "Spooner House" by name\n` +
-    `- State the discount clearly: one extra night, 20% off (= $X/night with the actual dollar amount)\n` +
-    `- Weave the portal/upsell shortcode in naturally — not as a standalone bare code\n` +
-    `- Invite them to reply if interested — absolutely no pressure\n` +
-    `- Outgoing guests: frame as "one more night before you go"\n` +
-    `- Incoming guests: frame as "arrive a night early and settle right in"\n\n` +
+    `- State clearly: one extra night, 20% off their current nightly rate (include the actual dollar amount)\n` +
+    `- Invite the guest to reply if they are interested — do NOT send them to a portal or external link\n` +
+    `- Outgoing guests: frame as extending their stay a little bit more\n` +
+    `- Incoming guests: frame as an unexpected night available if they want to come early\n\n` +
 
     `After ${DRY_RUN ? 'writing all messages' : 'sending all messages'}, provide a brief summary ` +
     `listing each guest contacted, their property, and the gap/last-minute night.\n` +
