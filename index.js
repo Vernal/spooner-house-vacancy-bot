@@ -264,14 +264,23 @@ async function runVacancyOfferWorkflow() {
     `**Step 1 — Get properties**\n` +
     `Fetch all properties.\n\n` +
 
-    `**Step 2 — 30-day gap scan (${today} → ${horizon})**\n` +
+    `**Step 2 — 30-day reservation scan (${today} → ${horizon})**\n` +
     `Fetch ALL reservations across all properties for this window. Use per_page:100 to maximise ` +
     `results per call. IMPORTANT: check the response for pagination metadata — if there are more ` +
     `pages, keep fetching until you have every reservation. Missing even one reservation will cause ` +
     `a gap to go undetected.\n` +
     `Once you have the complete list, sort by check-in date per property. ` +
-    `Find every consecutive pair (A, B) where A's checkout_date is exactly ` +
-    `one night before B's check_in_date — meaning there is exactly one vacant night between them.\n\n` +
+    `Find every consecutive pair (A, B) where A's checkout_date is exactly one night before ` +
+    `B's check_in_date. These are GAP CANDIDATES — do not add them to the gaps list yet.\n\n` +
+
+    `**Step 2b — Verify each gap candidate with the calendar**\n` +
+    `For each gap candidate, call get-property-calendar for that specific property on the gap night.\n` +
+    `- If the calendar shows that night as available/vacant → confirmed gap, add to the gaps list.\n` +
+    `- If blocked or unavailable → false gap, discard silently.\n` +
+    `This step is essential: Spooner House uses parent-child properties in Hospitable. A booking ` +
+    `on the parent (full house) blocks the children (individual rooms) and vice versa. The calendar ` +
+    `already reflects all of these blocking rules — it is the source of truth for whether a night ` +
+    `is genuinely available to sell.\n\n` +
 
     `**Step 3 — Last-minute check (${tomorrow})**\n` +
     `For each property that has a checkout on ${tomorrow} AND is NOT already covered by a gap ` +
